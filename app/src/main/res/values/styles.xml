@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- AIDE 无法解析 AndroidX AAR 资源，使用系统框架 Material 主题 -->
+    <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@drawable/bg_main</item>
+        <item name="android:statusBarColor">#050B18</item>
+        <item name="android:navigationBarColor">#050B18</item>
+        <item name="android:colorPrimary">#0E1E3C</item>
+        <item name="android:colorAccent">#1DE9B6</item>
+    </style>
+</resources>

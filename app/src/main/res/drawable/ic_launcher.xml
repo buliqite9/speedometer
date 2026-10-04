@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 深色圆底 -->
+    <path
+        android:fillColor="#0E1E3C"
+        android:pathData="M54,54m-54,0a54,54 0 1,1 108,0a54,54 0 1,1 -108,0" />
+
+    <!-- 表盘弧（135°→45°，缺口朝下） -->
+    <path
+        android:pathData="M28.5,79.5 A36,36 0 1,1 79.5,79.5"
+        android:strokeColor="#1DE9B6"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- 指针（指向上方，约 120km/h 位置） -->
+    <path
+        android:pathData="M54,54 L54,25"
+        android:strokeColor="#FF3D5A"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- 轴帽 -->
+    <path
+        android:fillColor="#FF3D5A"
+        android:pathData="M54,54m-6,0a6,6 0 1,1 12,0a6,6 0 1,1 -12,0" />
+    <path
+        android:fillColor="#0E1E3C"
+        android:pathData="M54,54m-2.5,0a2.5,2.5 0 1,1 5,0a2.5,2.5 0 1,1 -5,0" />
+
+</vector>

@@ -1,0 +1,24 @@
+// 顶层构建脚本
+buildscript {
+    repositories {
+        google()
+        jcenter()
+        mavenCentral()
+    }
+    dependencies {
+        // AGP 3.2.1：AIDE 可识别的 Gradle 版本区间，同时兼容 Android Studio 打开
+        classpath 'com.android.tools.build:gradle:3.2.1'
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        jcenter()
+        mavenCentral()
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}

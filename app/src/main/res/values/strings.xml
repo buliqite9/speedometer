@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">车速表</string>
+    <string name="header_title">GPS 实时测速</string>
+    <string name="waiting_gps">正在搜索 GPS 信号，请到开阔处…</string>
+    <string name="gps_ready">GPS 已定位，正在测量</string>
+    <string name="idle_hint">点击「开始测速」开始</string>
+    <string name="stopped_msg">已停止，点击「开始测速」重新测速</string>
+    <string name="start_btn">开始测速</string>
+    <string name="stop_btn">停止测速</string>
+    <string name="permission_denied">未授予定位权限，无法测速</string>
+    <string name="label_accuracy">精度</string>
+    <string name="label_satellites">卫星</string>
+    <string name="label_max">最高</string>
+    <string name="unit_kmh">km/h</string>
+    <string name="overspeed_off">限速提醒：关闭</string>
+    <string name="overspeed_value">限速提醒：%d km/h</string>
+    <string name="overspeed_title">选择限速提醒阈值</string>
+    <string name="unit_btn_fmt">单位：%s</string>
+    <string name="max_reset_toast">最高速度已清零，重新累计</string>
+    <string name="start_toast">已开始测速，正在等待 GPS 定位…</string>
+    <string name="perm_title">需要定位权限</string>
+    <string name="perm_msg">测速功能需要定位权限。您之前选择了拒绝，请在系统设置中手动允许本应用使用位置信息后返回。</string>
+    <string name="perm_go_settings">去设置</string>
+</resources>
