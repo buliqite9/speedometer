@@ -7,6 +7,7 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.drawable.GradientDrawable;
 import android.location.Address;
 import android.location.Geocoder;
@@ -28,10 +29,17 @@ import android.view.WindowManager;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayDeque;
+import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.TimeZone;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import java.io.BufferedWriter;
+import java.io.OutputStreamWriter;
+import java.text.SimpleDateFormat;
 
 public class MainActivity extends Activity {
 
@@ -57,6 +65,23 @@ public class MainActivity extends Activity {
     private TextView maxText;
     private TextView overspeedBtn;
     private TextView unitBtn;
+    private TextView altText;
+    private TextView gradeText;
+
+    /** 轨迹点：测速期间每个被采纳的定位点记一个，用于 GPX 导出 */
+    private static class TrackPoint {
+        long time;      // epoch ms
+        double lat, lon;
+        float ele;      // 海拔 m
+    }
+
+    private static final int MAX_TRACK_POINTS = 20000;
+    private static final int REQUEST_CREATE_GPX = 11;
+    private final ArrayDeque<TrackPoint> track = new ArrayDeque<TrackPoint>();
+
+    /** 坡度：由相邻定位点的海拔差/水平距离估算，EMA 平滑 */
+    private Location lastGradeLoc = null;
+    private float gradeSmooth = Float.NaN;
 
     private LocationManager locationManager;
     private Location lastLocation;
@@ -96,6 +121,12 @@ public class MainActivity extends Activity {
     private boolean overspeeding = false;
     /** 是否使用 m/s 显示（false 为 km/h），内部数据恒为 km/h */
     private boolean useMs = false;
+    /** 旋转重建视图后需要重新显示的运行时状态 */
+    private int statusResId = R.string.idle_hint;
+    private float lastAccuracyM = -1f;
+    private int lastSatellites = -1;
+    private float lastFilteredKmh = 0f;
+    private Location lastCoordsLocation = null;
     /** 是否处于测速中：未点开始前不监听定位 */
     private boolean running = false;
 
@@ -127,7 +158,7 @@ public class MainActivity extends Activity {
 
         @Override
         public void onProviderDisabled(String provider) {
-            statusText.setText(R.string.waiting_gps);
+            setStatus(R.string.waiting_gps);
         }
     };
 
@@ -141,6 +172,7 @@ public class MainActivity extends Activity {
                     for (GpsSatellite s : status.getSatellites()) {
                         if (s.usedInFix()) used++;
                     }
+                    lastSatellites = used;
                     satelliteText.setText(String.valueOf(used));
                 } catch (SecurityException ignored) {
                 }
@@ -154,6 +186,31 @@ public class MainActivity extends Activity {
         setContentView(R.layout.activity_main);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
+        vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+        prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        geocoder = new Geocoder(this, Locale.getDefault());
+
+        // 最高速度每次启动从零开始，不持久化
+        maxSpeed = 0f;
+        limitIndex = prefs.getInt(KEY_LIMIT_INDEX, 0);
+        useMs = prefs.getBoolean(KEY_UNIT_MS, false);
+
+        bindViews();
+        applyViewState();
+
+        Log.d(TAG, "onCreate done, permission=" + (checkSelfPermission(
+                Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED));
+
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
+            startInfoUpdates();
+        } else {
+            handleMissingPermission();
+        }
+    }
+
+    /** 绑定视图与点击事件（旋转屏幕后需重新调用） */
+    private void bindViews() {
         gauge = (SpeedometerView) findViewById(R.id.speedometer);
         chart = (SpeedChartView) findViewById(R.id.speed_chart);
         headerTitle = (TextView) findViewById(R.id.header_title);
@@ -166,20 +223,8 @@ public class MainActivity extends Activity {
         maxText = (TextView) findViewById(R.id.max_text);
         overspeedBtn = (TextView) findViewById(R.id.overspeed_btn);
         unitBtn = (TextView) findViewById(R.id.unit_btn);
-
-        vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
-        prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        geocoder = new Geocoder(this, Locale.getDefault());
-
-        // 最高速度每次启动从零开始，不持久化
-        maxSpeed = 0f;
-        maxText.setText("0");
-        limitIndex = prefs.getInt(KEY_LIMIT_INDEX, 0);
-        useMs = prefs.getBoolean(KEY_UNIT_MS, false);
-        gauge.setOverspeedLimit(LIMIT_OPTIONS[limitIndex]);
-        updateOverspeedButton();
-        applySkin();
-        applyUnit();
+        altText = (TextView) findViewById(R.id.alt_text);
+        gradeText = (TextView) findViewById(R.id.grade_text);
 
         // 点击"最高"一栏清零重新累计
         findViewById(R.id.max_box).setOnClickListener(new View.OnClickListener() {
@@ -194,6 +239,16 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 showLimitOptions();
+            }
+        });
+
+        // 点击表盘：HUD 模式下作为退出开关（表盘面积大，镜像状态下也好点）
+        gauge.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (hudOn) {
+                    toggleHud();
+                }
             }
         });
 
@@ -213,17 +268,66 @@ public class MainActivity extends Activity {
             }
         });
 
-        // 未开始测速前不监听定位测速，但坐标/地址常驻更新
-        statusText.setText(R.string.idle_hint);
-        Log.d(TAG, "onCreate done, permission=" + (checkSelfPermission(
-                Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED));
+        // HUD：表盘上下镜像，供挡风玻璃反射
+        findViewById(R.id.hud_btn).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggleHud();
+            }
+        });
 
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED) {
-            startInfoUpdates();
-        } else {
-            handleMissingPermission();
+        // 导出 GPX 轨迹（系统文件选择器，无需存储权限）
+        findViewById(R.id.gpx_btn).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                exportGpx();
+            }
+        });
+    }
+
+    /** 把当前运行状态重新应用到视图（旋转屏幕后调用） */
+    private void applyViewState() {
+        // HUD 整屏镜像 + 沉浸隐藏（root 在 setContentView 后重建，需重设）
+        findViewById(R.id.root_box).setScaleY(hudOn ? -1f : 1f);
+        findViewById(R.id.btn_area).setVisibility(hudOn ? View.GONE : View.VISIBLE);
+        gauge.setOverspeedLimit(LIMIT_OPTIONS[limitIndex]);
+        gauge.setOverspeed(overspeeding);
+        gauge.setSpeed(lastFilteredKmh);
+        applySkin();
+        applyUnit();
+        maxText.setText(formatSpeed(maxSpeed));
+        if (lastAccuracyM >= 0f) {
+            accuracyText.setText(String.format(Locale.getDefault(), "±%.0fm", lastAccuracyM));
         }
+        if (lastSatellites >= 0) {
+            satelliteText.setText(String.valueOf(lastSatellites));
+        }
+        if (lastCoordsLocation != null) {
+            updateCoordsUI(lastCoordsLocation);
+        }
+        if (Float.isNaN(gradeSmooth)) {
+            gradeText.setText("--");
+        } else {
+            gradeText.setText(String.format(Locale.getDefault(), "坡度 %+.1f%%", gradeSmooth));
+        }
+        statusText.setText(statusResId);
+        startBtn.setText(running ? R.string.stop_btn : R.string.start_btn);
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        Log.d(TAG, "onConfigurationChanged: orientation=" + newConfig.orientation);
+        // 声明了 configChanges 自行处理旋转：重挂视图（系统自动选择横/竖屏布局），
+        // 并把全部运行状态重新应用，测速不中断、数据不丢
+        setContentView(R.layout.activity_main);
+        bindViews();
+        applyViewState();
+    }
+
+    private void setStatus(int resId) {
+        statusResId = resId;
+        statusText.setText(resId);
     }
 
     /**
@@ -267,7 +371,7 @@ public class MainActivity extends Activity {
                 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             startInfoUpdates();
         } else {
-            statusText.setText(R.string.permission_denied);
+            setStatus(R.string.permission_denied);
             Toast.makeText(this, R.string.permission_denied, Toast.LENGTH_LONG).show();
         }
     }
@@ -292,8 +396,12 @@ public class MainActivity extends Activity {
         maxText.setTextColor(s.maxColor);
         overspeedBtn.setTextColor(s.accent);
         unitBtn.setTextColor(s.accent);
+        altText.setTextColor(s.accent);
+        gradeText.setTextColor(s.tickLabel);
         coordsText.setTextColor(s.accent);
         addressText.setTextColor(s.tickLabel);
+        ((TextView) findViewById(R.id.hud_btn)).setTextColor(s.accent);
+        ((TextView) findViewById(R.id.gpx_btn)).setTextColor(s.accent);
         chart.setSkin(s);
 
         GradientDrawable startBg = new GradientDrawable();
@@ -317,9 +425,13 @@ public class MainActivity extends Activity {
         if (!running) {
             chart.reset();
             speedFilter.reset();
+            track.clear();
+            lastGradeLoc = null;
+            gradeSmooth = Float.NaN;
+            gradeText.setText("--");
             running = true;
             startBtn.setText(R.string.stop_btn);
-            statusText.setText(R.string.waiting_gps);
+            setStatus(R.string.waiting_gps);
             Toast.makeText(this, R.string.start_toast, Toast.LENGTH_SHORT).show();
             Log.d(TAG, "start measuring");
             startGps();
@@ -327,7 +439,7 @@ public class MainActivity extends Activity {
             running = false;
             startBtn.setText(R.string.start_btn);
             stopGps();
-            statusText.setText(R.string.stopped_msg);
+            setStatus(R.string.stopped_msg);
             Log.d(TAG, "stop measuring");
         }
     }
@@ -371,8 +483,10 @@ public class MainActivity extends Activity {
 
     /** 更新经纬度与地址显示 */
     private void updateCoordsUI(Location location) {
+        lastCoordsLocation = location;
         coordsText.setText(String.format(Locale.getDefault(), "%.5f°, %.5f°",
                 location.getLatitude(), location.getLongitude()));
+        altText.setText(String.format(Locale.getDefault(), "%.0fm", location.getAltitude()));
         maybeGeocode(location);
     }
 
@@ -399,10 +513,82 @@ public class MainActivity extends Activity {
         maxText.setText(formatSpeed(maxSpeed));
     }
 
+    private boolean hudOn = false;
+
+    private void toggleHud() {
+        hudOn = !hudOn;
+        // 整屏上下镜像：表盘、数据、按钮全部反向，玻璃反射后即为正像
+        findViewById(R.id.root_box).setScaleY(hudOn ? -1f : 1f);
+        // 沉浸模式：隐藏功能按钮，只留表盘和数据；点击表盘退出
+        findViewById(R.id.btn_area).setVisibility(hudOn ? View.GONE : View.VISIBLE);
+        gauge.setHud(false);
+        Toast.makeText(this, hudOn ? R.string.hud_on_toast : R.string.hud_off_toast,
+                Toast.LENGTH_LONG).show();
+    }
+
+    /** 通过系统文件选择器导出 GPX（SAF，无需存储权限） */
+    private void exportGpx() {
+        if (track.isEmpty()) {
+            Toast.makeText(this, R.string.gpx_none_toast, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/gpx+xml");
+        String fname = "track_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+                .format(new Date()) + ".gpx";
+        intent.putExtra(Intent.EXTRA_TITLE, fname);
+        try {
+            startActivityForResult(intent, REQUEST_CREATE_GPX);
+        } catch (Exception e) {
+            Toast.makeText(this, R.string.gpx_failed_toast, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_CREATE_GPX && resultCode == RESULT_OK
+                && data != null && data.getData() != null) {
+            writeGpx(data.getData());
+        }
+    }
+
+    private void writeGpx(Uri uri) {
+        SimpleDateFormat utc = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
+        utc.setTimeZone(TimeZone.getTimeZone("UTC"));
+        BufferedWriter writer = null;
+        try {
+            writer = new BufferedWriter(new OutputStreamWriter(
+                    getContentResolver().openOutputStream(uri), "UTF-8"));
+            writer.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+            writer.write("<gpx version=\"1.1\" creator=\"Speedometer\">\n");
+            writer.write("<trk><name>Speedometer Track</name><trkseg>\n");
+            for (TrackPoint p : track) {
+                writer.write(String.format(Locale.US,
+                        "<trkpt lat=\"%.6f\" lon=\"%.6f\"><ele>%.1f</ele><time>%s</time></trkpt>\n",
+                        p.lat, p.lon, p.ele, utc.format(new Date(p.time))));
+            }
+            writer.write("</trkseg></trk>\n</gpx>\n");
+            writer.flush();
+            Toast.makeText(this, R.string.gpx_saved_toast, Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Log.d(TAG, "writeGpx failed: " + e);
+            Toast.makeText(this, R.string.gpx_failed_toast, Toast.LENGTH_SHORT).show();
+        } finally {
+            if (writer != null) {
+                try {
+                    writer.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
     private void startGps() {
         locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
         if (locationManager == null) {
-            statusText.setText(R.string.waiting_gps);
+            setStatus(R.string.waiting_gps);
             return;
         }
         // 每个 provider 独立注册，一个失败不影响另一个
@@ -438,7 +624,7 @@ public class MainActivity extends Activity {
             Log.d(TAG, "Network register failed: " + e);
         }
         if (!any) {
-            statusText.setText(R.string.waiting_gps);
+            setStatus(R.string.waiting_gps);
             return;
         }
         // 已有缓存定位时先显示一次，缩短首次出数时间
@@ -459,6 +645,7 @@ public class MainActivity extends Activity {
                 + " speed=" + (location.hasSpeed() ? location.getSpeed() * 3.6f : -1f)
                 + " acc=" + location.getAccuracy());
         float accuracy = location.getAccuracy();
+        lastAccuracyM = accuracy;
         accuracyText.setText(String.format(Locale.getDefault(), "±%.0fm", accuracy));
 
         updateCoordsUI(location);
@@ -494,13 +681,39 @@ public class MainActivity extends Activity {
                 maxText.setText(formatSpeed(maxSpeed));
             }
             // 表盘与曲线内部均存 km/h，由各自视图按当前单位换算显示
+            lastFilteredKmh = filtered;
             gauge.setSpeed(filtered);
             chart.addSample(filtered);
+
+            // 轨迹记录（供 GPX 导出）
+            TrackPoint tp = new TrackPoint();
+            tp.time = location.getTime();
+            tp.lat = location.getLatitude();
+            tp.lon = location.getLongitude();
+            tp.ele = (float) location.getAltitude();
+            track.addLast(tp);
+            while (track.size() > MAX_TRACK_POINTS) {
+                track.pollFirst();
+            }
+
+            // 坡度：海拔差 / 水平距离，EMA 平滑抑制 GPS 垂直噪声
+            if (lastGradeLoc != null) {
+                float dist = location.distanceTo(lastGradeLoc);
+                if (dist > 10f) {
+                    float dAlt = (float) (location.getAltitude() - lastGradeLoc.getAltitude());
+                    float grade = Math.max(-30f, Math.min(30f, dAlt / dist * 100f));
+                    gradeSmooth = Float.isNaN(gradeSmooth) ? grade : gradeSmooth * 0.6f + grade * 0.4f;
+                    lastGradeLoc = location;
+                    gradeText.setText(String.format(Locale.getDefault(), "坡度 %+.1f%%", gradeSmooth));
+                }
+            } else {
+                lastGradeLoc = location;
+            }
 
             checkOverspeed(filtered);
         }
 
-        statusText.setText(R.string.gps_ready);
+        setStatus(R.string.gps_ready);
         lastLocation = location;
     }
 

@@ -45,6 +45,8 @@ public class SpeedometerView extends View {
     private float overspeedLimit = -1f;
     /** 是否处于超速状态（数字读数红闪） */
     private boolean overspeed = false;
+    /** HUD 模式：整个表盘上下镜像，供挡风玻璃反射查看 */
+    private boolean hud = false;
 
     private Skin skin = Skin.ALL[0];
 
@@ -91,6 +93,14 @@ public class SpeedometerView extends View {
     public void setOverspeed(boolean over) {
         if (overspeed != over) {
             overspeed = over;
+            invalidate();
+        }
+    }
+
+    /** HUD 模式开关：表盘上下镜像（平放挡风玻璃下利用反射正读） */
+    public void setHud(boolean on) {
+        if (hud != on) {
+            hud = on;
             invalidate();
         }
     }
@@ -196,6 +206,12 @@ public class SpeedometerView extends View {
         float radius = Math.min(w, h) / 2f * 0.94f;
         float stroke = radius * 0.085f;
 
+        // HUD：翻转整个表盘（含指针与数字），玻璃反射后即为正像
+        if (hud) {
+            canvas.save();
+            canvas.scale(1f, -1f, cx, cy);
+        }
+
         // ---- 表盘底：径向渐变圆 ----
         paint.setShader(new RadialGradient(cx, cy, radius,
                 skin.dialStart, skin.dialEnd, Shader.TileMode.CLAMP));
@@ -246,6 +262,10 @@ public class SpeedometerView extends View {
 
         // ---- 数字读数 ----
         drawDigital(canvas, cx, cy, radius);
+
+        if (hud) {
+            canvas.restore();
+        }
     }
 
     private void drawTicks(Canvas canvas, float cx, float cy, float radius) {

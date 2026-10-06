@@ -11,6 +11,14 @@
     <string name="permission_denied">未授予定位权限，无法测速</string>
     <string name="label_accuracy">精度</string>
     <string name="label_satellites">卫星</string>
+    <string name="label_alt">海拔</string>
+    <string name="hud_btn">HUD</string>
+    <string name="gpx_btn">导出GPX</string>
+    <string name="hud_on_toast">HUD 已开启：点击表盘可退出</string>
+    <string name="hud_off_toast">HUD 已关闭</string>
+    <string name="gpx_none_toast">还没有轨迹，开始测速后自动记录</string>
+    <string name="gpx_saved_toast">GPX 轨迹已导出</string>
+    <string name="gpx_failed_toast">导出失败，请重试</string>
     <string name="label_max">最高</string>
     <string name="unit_kmh">km/h</string>
     <string name="overspeed_off">限速提醒：关闭</string>
